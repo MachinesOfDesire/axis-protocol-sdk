@@ -1,0 +1,43 @@
+{
+  "name": "axis-protocol-sdk",
+  "version": "0.1.0",
+  "description": "Reference SDK for the AXIS protocol. Agent identity, signing, and registry operations. Zero runtime dependencies; runs in Node 20+, Cloudflare Workers, and modern browsers.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./crypto": "./src/crypto.js",
+    "./errors": "./src/errors.js"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
+  "keywords": [
+    "axis",
+    "axis-protocol",
+    "agent-identity",
+    "did",
+    "ed25519",
+    "sdk"
+  ],
+  "author": "Josh Ashcroft",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "homepage": "https://github.com/MachinesOfDesire/axis-protocol-sdk",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MachinesOfDesire/axis-protocol-sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MachinesOfDesire/axis-protocol-sdk/issues"
+  },
+  "files": [
+    "src/",
+    "examples/",
+    "README.md",
+    "LICENSE"
+  ]
+}
