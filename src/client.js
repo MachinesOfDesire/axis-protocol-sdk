@@ -254,29 +254,37 @@ export class AxisClient {
   /**
    * POST /delegations — create a delegation credential.
    *
+   * Per AXIS Protocol Spec v0.1 §4.4, the canonical Delegation Credential
+   * fields are `created` and `expires` (ISO-8601 timestamps). The SDK's
+   * earlier `expires_at` parameter name diverged from the spec; v0.2.0
+   * accepts both `expires` (canonical) and `expires_at` (legacy alias)
+   * and forwards the canonical name to the registry.
+   *
    * @param {object} opts
    * @param {string} opts.issued_by                    Full axis id of the issuer (agent or operator)
    * @param {string} opts.issued_to                    Full axis id of the recipient
    * @param {string} opts.root_operator                Operator identity at the root of the delegation chain. For self-issued delegations (operator → its own agent) this is the same as issued_by. Per spec v0.1, must be byte-for-byte identical across every credential in a chain.
    * @param {string[]} opts.scope                      Non-empty array of scope tokens
-   * @param {string} opts.expires_at                   ISO-8601 timestamp
+   * @param {string} opts.expires                      ISO-8601 expiration timestamp (canonical)
+   * @param {string} [opts.expires_at]                 Legacy alias for `expires`. Accepted for backward compat.
    * @param {object} [opts.constraints]                Optional constraints object
    * @param {string} [opts.parent_credential_id]       Optional parent delegation for attenuation
    * @param {string} [opts.signature]                  Optional signature over canonical body
    */
-  async createDelegation({ issued_by, issued_to, root_operator, scope, expires_at, constraints, parent_credential_id, signature } = {}) {
+  async createDelegation({ issued_by, issued_to, root_operator, scope, expires, expires_at, constraints, parent_credential_id, signature } = {}) {
     if (!issued_by) throw new AxisError(ERR.INVALID_INPUT, "issued_by is required");
     if (!issued_to) throw new AxisError(ERR.INVALID_INPUT, "issued_to is required");
     if (!Array.isArray(scope) || scope.length === 0) {
       throw new AxisError(ERR.INVALID_INPUT, "scope must be a non-empty array");
     }
-    if (!expires_at) throw new AxisError(ERR.INVALID_INPUT, "expires_at is required");
+    const effective_expires = expires || expires_at;
+    if (!effective_expires) throw new AxisError(ERR.INVALID_INPUT, "expires is required");
     // root_operator is required by the registry per AXIS spec v0.1. For
     // self-issued delegations (operator → its own agent) it defaults to
     // issued_by; chained delegations must pass it explicitly to keep the
     // chain anchored to the same root.
     const effective_root = root_operator || issued_by;
-    const body = { issued_by, issued_to, root_operator: effective_root, scope, expires_at };
+    const body = { issued_by, issued_to, root_operator: effective_root, scope, expires: effective_expires };
     if (constraints) body.constraints = constraints;
     if (parent_credential_id) body.parent_credential_id = parent_credential_id;
     if (signature) body.signature = signature;
