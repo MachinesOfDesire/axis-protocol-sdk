@@ -257,20 +257,26 @@ export class AxisClient {
    * @param {object} opts
    * @param {string} opts.issued_by                    Full axis id of the issuer (agent or operator)
    * @param {string} opts.issued_to                    Full axis id of the recipient
+   * @param {string} opts.root_operator                Operator identity at the root of the delegation chain. For self-issued delegations (operator → its own agent) this is the same as issued_by. Per spec v0.1, must be byte-for-byte identical across every credential in a chain.
    * @param {string[]} opts.scope                      Non-empty array of scope tokens
    * @param {string} opts.expires_at                   ISO-8601 timestamp
    * @param {object} [opts.constraints]                Optional constraints object
    * @param {string} [opts.parent_credential_id]       Optional parent delegation for attenuation
    * @param {string} [opts.signature]                  Optional signature over canonical body
    */
-  async createDelegation({ issued_by, issued_to, scope, expires_at, constraints, parent_credential_id, signature } = {}) {
+  async createDelegation({ issued_by, issued_to, root_operator, scope, expires_at, constraints, parent_credential_id, signature } = {}) {
     if (!issued_by) throw new AxisError(ERR.INVALID_INPUT, "issued_by is required");
     if (!issued_to) throw new AxisError(ERR.INVALID_INPUT, "issued_to is required");
     if (!Array.isArray(scope) || scope.length === 0) {
       throw new AxisError(ERR.INVALID_INPUT, "scope must be a non-empty array");
     }
     if (!expires_at) throw new AxisError(ERR.INVALID_INPUT, "expires_at is required");
-    const body = { issued_by, issued_to, scope, expires_at };
+    // root_operator is required by the registry per AXIS spec v0.1. For
+    // self-issued delegations (operator → its own agent) it defaults to
+    // issued_by; chained delegations must pass it explicitly to keep the
+    // chain anchored to the same root.
+    const effective_root = root_operator || issued_by;
+    const body = { issued_by, issued_to, root_operator: effective_root, scope, expires_at };
     if (constraints) body.constraints = constraints;
     if (parent_credential_id) body.parent_credential_id = parent_credential_id;
     if (signature) body.signature = signature;
@@ -417,12 +423,27 @@ export class AxisClient {
       proof: { proofValue },
     });
     const agent_id = record.axis_id || record.did;
+    // Surface operator_id at the top level of the session for ergonomic
+    // access. Newer registries return it top-level on the /register
+    // response; older ones nest it under document.axisMetadata.operator.id.
+    // We accept both shapes so the SDK works against either.
+    const operator_id =
+      record.operator_id ??
+      record.document?.axisMetadata?.operator?.id ??
+      null;
+    // Also patch the record itself so callers reading `session.record.operator_id`
+    // (which the AXIS spec defines as a top-level Agent Identity Record field)
+    // see it regardless of which registry shape came back.
+    if (operator_id && !record.operator_id) {
+      record.operator_id = operator_id;
+    }
     const sign = ({ ttl = 300, claims = {} } = {}) =>
       signAIT({ privateKey: keypair.privateKey, agentId: agent_id, ttl, claims });
     return {
       agent_id,
       did: record.did,
       axis_id: record.axis_id,
+      operator_id,
       record,
       keypair,
       sign,
