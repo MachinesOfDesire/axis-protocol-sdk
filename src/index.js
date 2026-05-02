@@ -36,5 +36,5 @@ export {
 export { b64urlEncode, b64urlDecode, b64urlDecodeString } from "./base64url.js";
 export { AxisError, ERR } from "./errors.js";
 
-export const SDK_VERSION = "0.2.0";
+export const SDK_VERSION = "0.2.1";
 export const AXIS_PROTOCOL_VERSION = "0.1";
