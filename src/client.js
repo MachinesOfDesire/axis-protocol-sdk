@@ -432,13 +432,21 @@ export class AxisClient {
     });
     const agent_id = record.axis_id || record.did;
     // Surface operator_id at the top level of the session for ergonomic
-    // access. Newer registries return it top-level on the /register
-    // response; older ones nest it under document.axisMetadata.operator.id.
-    // We accept both shapes so the SDK works against either.
-    const operator_id =
-      record.operator_id ??
-      record.document?.axisMetadata?.operator?.id ??
-      null;
+    // access. The AXIS spec defines operator_id in the canonical
+    // `axis:{slug}:operator` form. Two registry response shapes need
+    // handling:
+    //   - Newer registries: return `operator_id` top-level on /register
+    //     in canonical form. Use as-is.
+    //   - Older registries: nest the bare operator slug under
+    //     `document.axisMetadata.operator.id` (e.g. "offworldnews-ai").
+    //     Reconstruct the canonical form.
+    let operator_id = record.operator_id ?? null;
+    if (!operator_id) {
+      const bareSlug = record.document?.axisMetadata?.operator?.id;
+      if (bareSlug) {
+        operator_id = `axis:${bareSlug}:operator`;
+      }
+    }
     // Also patch the record itself so callers reading `session.record.operator_id`
     // (which the AXIS spec defines as a top-level Agent Identity Record field)
     // see it regardless of which registry shape came back.
