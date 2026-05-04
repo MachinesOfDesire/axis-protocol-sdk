@@ -22,6 +22,12 @@
  *   const ait = await session.sign({ ttl: 300, claims: { act: "publish" } });
  */
 
+// SDK_VERSION is derived from package.json so the two cannot drift. JSON
+// import attributes are supported on the SDK's targets: Node 20+ (the
+// engines pin), Cloudflare Workers (wrangler/esbuild inlines the JSON at
+// bundle time), and modern browsers / bundlers.
+import pkg from "../package.json" with { type: "json" };
+
 export { AxisClient } from "./client.js";
 export {
   generateKeypair,
@@ -36,5 +42,5 @@ export {
 export { b64urlEncode, b64urlDecode, b64urlDecodeString } from "./base64url.js";
 export { AxisError, ERR } from "./errors.js";
 
-export const SDK_VERSION = "0.2.1";
+export const SDK_VERSION = pkg.version;
 export const AXIS_PROTOCOL_VERSION = "0.1";
