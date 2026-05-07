@@ -2,7 +2,7 @@
 
 Reference SDK for the **AXIS protocol**. Agent identity, signing, and registry operations in one small library. Zero runtime dependencies, ESM, runs in Node 20+, Cloudflare Workers, Deno, Bun, and modern browsers.
 
-> **Status:** v0.1. The protocol itself is v0.1 (Apache 2.0) at [MachinesOfDesire/axis-protocol](https://github.com/MachinesOfDesire/axis-protocol). Breaking changes are possible before v1.
+> **Status:** v0.2.1 (the constant `SDK_VERSION` is derived from `package.json` so the two cannot drift). The protocol itself is v0.1.1 (Apache 2.0) at [MachinesOfDesire/axis-protocol](https://github.com/MachinesOfDesire/axis-protocol). Breaking changes are possible before v1.
 
 ---
 
@@ -107,7 +107,7 @@ The same `AxisClient` handles every role of caller. If the API key is missing or
 | `registerAgent({operator, publicKey, metadata, service, proof})` | POST `/register` |
 | `deactivateAgent(id, {reason})` | DELETE `/agents/:id` |
 | `listAgents({operator_id})` | GET `/agents?operator_id=` |
-| `createDelegation({issued_by, issued_to, scope, expires_at, ...})` | POST `/delegations` |
+| `createDelegation({issued_by, issued_to, root_operator, scope, expires, constraints?, parent_credential_id?, signature?})` | POST `/delegations` |
 | `revokeDelegation(id, {reason})` | DELETE `/delegations/:id` |
 | `verifyDomain({email, domain, method})` | POST `/operators/verify-domain` |
 | `checkDomain({domain, token})` | POST `/operators/verify-domain/check` |
