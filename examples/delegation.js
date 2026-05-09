@@ -40,11 +40,13 @@ try {
   console.log("Recipient:", recipient.axis_id);
 
   // Step 2: create a 14-day scoped delegation, non-sub-delegable.
+  // Note: the canonical timestamp field is `expires` (per AXIS spec v0.1 §4.4),
+  // not the historical `expires_at` alias.
   const delegation = await client.createDelegation({
     issued_by: issuer.axis_id,
     issued_to: recipient.axis_id,
     scope: ["research:read", "draft:write"],
-    expires_at: new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString(),
+    expires: new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString(),
     constraints: { max_articles: 1, can_subdelegate: false },
   });
   console.log("\nCreated delegation:", delegation.id || delegation.delegation_id);
