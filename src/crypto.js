@@ -81,12 +81,7 @@ export async function importPublicKey(publicKeyB64) {
  */
 export async function signAIT({ privateKey, agentId, ttl = 300, claims = {} }) {
   if (!agentId) throw new AxisError(ERR.INVALID_INPUT, "signAIT: agentId is required");
-  let key = privateKey;
-  if (privateKey && typeof privateKey === "object" && !("type" in privateKey)) {
-    // Looks like a JWK
-    key = await importPrivateKey(privateKey);
-  }
-  if (!key) throw new AxisError(ERR.INVALID_INPUT, "signAIT: privateKey is required");
+  const key = await _coerceToCryptoKey(privateKey, "signAIT");
 
   const header = { alg: "EdDSA", typ: "AIT", kid: agentId };
   const now = Math.floor(Date.now() / 1000);
@@ -101,6 +96,52 @@ export async function signAIT({ privateKey, agentId, ttl = 300, claims = {} }) {
     await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(signingInput))
   );
   return `${signingInput}.${b64urlEncode(sig)}`;
+}
+
+/**
+ * Coerce a private-key input to a CryptoKey usable by `crypto.subtle.sign`.
+ * Accepts either:
+ *   - a CryptoKey directly (used as-is)
+ *   - a JWK object (imported via importPrivateKey)
+ *
+ * S-M1: detection no longer relies on the absence of the `type` property
+ * (Object.prototype could have one in unusual environments, and CryptoKey
+ * also has a `type` getter, so `!("type" in privateKey)` was both a false-
+ * positive risk and a footgun). Detection now checks the JWK-defining `kty`
+ * property and uses `instanceof CryptoKey` (when the global is available)
+ * as the positive identity test.
+ *
+ * @param {CryptoKey|object} privateKey  Ed25519 private key (CryptoKey or JWK)
+ * @param {string} caller                 Function name, for error messages
+ * @returns {Promise<CryptoKey>}
+ */
+async function _coerceToCryptoKey(privateKey, caller) {
+  if (!privateKey) {
+    throw new AxisError(ERR.INVALID_INPUT, `${caller}: privateKey is required`);
+  }
+  // CryptoKey path. `instanceof CryptoKey` works in Node 20+, browsers, and
+  // Cloudflare Workers. If the global is absent (some non-standard host),
+  // fall back to a duck-typed check on `algorithm` + `type` getters.
+  if (typeof CryptoKey !== "undefined" && privateKey instanceof CryptoKey) {
+    return privateKey;
+  }
+  if (
+    typeof privateKey === "object" &&
+    typeof privateKey.algorithm === "object" &&
+    typeof privateKey.type === "string" &&
+    typeof privateKey.extractable === "boolean"
+  ) {
+    return privateKey;
+  }
+  // JWK path. RFC 7517 §4.1: `kty` is REQUIRED on every JWK. For Ed25519
+  // it's "OKP" (RFC 8037 §2).
+  if (typeof privateKey === "object" && typeof privateKey.kty === "string") {
+    return importPrivateKey(privateKey);
+  }
+  throw new AxisError(
+    ERR.INVALID_INPUT,
+    `${caller}: privateKey must be a CryptoKey or a JWK with a kty field`
+  );
 }
 
 /**
@@ -128,10 +169,7 @@ export function canonicalize(obj) {
  * @returns {Promise<string>}            base64url-encoded Ed25519 signature
  */
 export async function signCanonical(privateKey, body) {
-  let key = privateKey;
-  if (privateKey && typeof privateKey === "object" && !("type" in privateKey)) {
-    key = await importPrivateKey(privateKey);
-  }
+  const key = await _coerceToCryptoKey(privateKey, "signCanonical");
   const canonical = canonicalize(body);
   const sig = new Uint8Array(
     await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(canonical))

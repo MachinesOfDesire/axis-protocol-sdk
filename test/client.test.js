@@ -251,3 +251,167 @@ test("409 maps to CONFLICT", async () => {
     (err) => err.code === ERR.CONFLICT,
   );
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Security review 2026-05-08/09 — unshipped findings (S-L1..L3, S-M1..M3)
+// Tests for the v0.2.3 hardening pass.
+// ────────────────────────────────────────────────────────────────────────────
+
+test("S-L2: constructor rejects http:// by default", () => {
+  assert.throws(
+    () => new AxisClient({ registryUrl: "http://registry.local" }),
+    (err) => err instanceof AxisError && err.code === ERR.INVALID_INPUT && /https:\/\//.test(err.message),
+  );
+});
+
+test("S-L2: constructor accepts http:// when allowInsecure: true is set", () => {
+  const c = new AxisClient({ registryUrl: "http://registry.local", allowInsecure: true });
+  assert.equal(c.registryUrl, "http://registry.local");
+});
+
+test("S-L2: constructor accepts https:// without allowInsecure", () => {
+  const c = new AxisClient({ registryUrl: "https://registry.axisprime.ai" });
+  assert.equal(c.registryUrl, "https://registry.axisprime.ai");
+});
+
+test("S-L2: constructor rejects non-http(s) schemes", () => {
+  assert.throws(
+    () => new AxisClient({ registryUrl: "file:///tmp/r" }),
+    (err) => err.code === ERR.INVALID_INPUT,
+  );
+});
+
+test("S-L1: public calls do NOT send Authorization even when apiKey is set", async () => {
+  let observedAuth = "MISSING";
+  const fakeFetch = async (_url, opts) => {
+    observedAuth = (opts && opts.headers && opts.headers["Authorization"]) || "MISSING";
+    return { ok: true, json: async () => ({ agent_id: "axis:op:a", status: "active" }) };
+  };
+  const c = new AxisClient({
+    registryUrl: "https://r.example",
+    apiKey: "secret-key-do-not-leak",
+    fetch: fakeFetch,
+  });
+  await c.resolveAgent("axis:op:a");
+  assert.equal(observedAuth, "MISSING", "public endpoint must not receive Authorization header");
+});
+
+test("S-L1: authenticated calls DO send Authorization when apiKey is set", async () => {
+  let observedAuth = "MISSING";
+  const fakeFetch = async (_url, opts) => {
+    observedAuth = (opts && opts.headers && opts.headers["Authorization"]) || "MISSING";
+    return { ok: true, json: async () => ({ axis_id: "axis:op:new" }) };
+  };
+  const c = new AxisClient({
+    registryUrl: "https://r.example",
+    apiKey: "secret",
+    fetch: fakeFetch,
+  });
+  await c.registerAgent({ operator: { email: "a@b" }, publicKey: "p" });
+  assert.equal(observedAuth, "Bearer secret");
+});
+
+test("S-L3: _slugFromAgentId handles v0.1 axis:op:slug", () => {
+  assert.equal(AxisClient._slugFromAgentId("axis:offworld:mira"), "mira");
+});
+
+test("S-L3: _slugFromAgentId handles v0.1 did:axis:registry:slug", () => {
+  assert.equal(AxisClient._slugFromAgentId("did:axis:prime:mira"), "mira");
+});
+
+test("S-L3: _slugFromAgentId handles v0.2 did:axis:registry:operator:slug", () => {
+  assert.equal(AxisClient._slugFromAgentId("did:axis:prime:offworld:mira"), "mira");
+});
+
+test("S-L3: _slugFromAgentId returns bare slug unchanged", () => {
+  assert.equal(AxisClient._slugFromAgentId("just-a-slug"), "just-a-slug");
+});
+
+test("S-L3: _slugFromAgentId returns malformed input unchanged (no silent truncation)", () => {
+  // Pre-fix behavior would .split(":").pop() and return "garbage" for any
+  // colon-bearing string. New behavior: only matches known grammars.
+  assert.equal(AxisClient._slugFromAgentId("not:a:valid:axis:thing:garbage"), "not:a:valid:axis:thing:garbage");
+});
+
+test("S-L3: _slugFromAgentId returns empty/null inputs unchanged", () => {
+  assert.equal(AxisClient._slugFromAgentId(null), null);
+  assert.equal(AxisClient._slugFromAgentId(""), "");
+  assert.equal(AxisClient._slugFromAgentId(undefined), undefined);
+});
+
+test("S-M2: _abortable returns no-op when timeout is 0", () => {
+  const c = new AxisClient({ registryUrl: "https://r.example", timeout: 0 });
+  const { signal, clear } = c._abortable();
+  assert.equal(signal, undefined);
+  assert.doesNotThrow(() => clear());
+});
+
+test("S-M2: _abortable returns AbortController-backed signal when timeout is set", () => {
+  const c = new AxisClient({ registryUrl: "https://r.example", timeout: 100 });
+  const { signal, clear } = c._abortable();
+  assert.ok(signal, "signal should be present");
+  assert.equal(signal.aborted, false);
+  clear();
+});
+
+test("S-M2: constructor rejects negative timeout", () => {
+  assert.throws(
+    () => new AxisClient({ registryUrl: "https://r.example", timeout: -1 }),
+    (err) => err.code === ERR.INVALID_INPUT,
+  );
+});
+
+test("S-M2: hung fetch aborts via timeout and surfaces as REGISTRY_UNREACHABLE", async () => {
+  const hangingFetch = (_url, opts) =>
+    new Promise((_, reject) => {
+      if (opts && opts.signal) {
+        opts.signal.addEventListener("abort", () => reject(new Error("aborted")));
+      }
+    });
+  const c = new AxisClient({
+    registryUrl: "https://r.example",
+    timeout: 30,
+    fetch: hangingFetch,
+  });
+  await assert.rejects(
+    () => c.resolveAgent("axis:op:a"),
+    (err) => err instanceof AxisError && err.code === ERR.REGISTRY_UNREACHABLE,
+  );
+});
+
+test("S-M3: verifyAIT routes through _request and sends User-Agent when configured", async () => {
+  let observedUA = "MISSING";
+  const fakeFetch = async (_url, opts) => {
+    observedUA = (opts && opts.headers && opts.headers["User-Agent"]) || "MISSING";
+    return { ok: true, json: async () => ({ valid: true, agent_id: "axis:op:a", status: "active" }) };
+  };
+  const c = new AxisClient({
+    registryUrl: "https://r.example",
+    userAgent: "test-suite/1.0",
+    fetch: fakeFetch,
+  });
+  const r = await c.verifyAIT("token");
+  assert.equal(r.valid, true);
+  assert.equal(observedUA, "test-suite/1.0");
+});
+
+test("S-M3: verifyAIT preserves {valid:false} semantic on 4xx token errors", async () => {
+  const fakeFetch = async () => ({
+    ok: false,
+    status: 401,
+    json: async () => ({ error: { code: "ait_expired", message: "Token expired" } }),
+  });
+  const c = new AxisClient({ registryUrl: "https://r.example", fetch: fakeFetch });
+  const r = await c.verifyAIT("expired-token");
+  assert.equal(r.valid, false);
+  assert.match(r.error, /expired/i);
+});
+
+test("S-M3: verifyAIT still throws on transport failure (REGISTRY_UNREACHABLE)", async () => {
+  const failingFetch = async () => { throw new Error("ECONNREFUSED"); };
+  const c = new AxisClient({ registryUrl: "https://r.example", fetch: failingFetch });
+  await assert.rejects(
+    () => c.verifyAIT("token"),
+    (err) => err instanceof AxisError && err.code === ERR.REGISTRY_UNREACHABLE,
+  );
+});

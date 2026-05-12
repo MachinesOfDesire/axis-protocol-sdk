@@ -129,3 +129,53 @@ test("importPublicKey rejects keys of wrong length", async () => {
     (err) => err.code === ERR.INVALID_INPUT,
   );
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Security review 2026-05-08/09 — S-M1: robust private-key detection
+// ────────────────────────────────────────────────────────────────────────────
+
+test("S-M1: signAIT accepts a JWK", async () => {
+  const kp = await generateKeypair();
+  const ait = await signAIT({
+    privateKey: kp.privateKeyJwk,
+    agentId: "axis:op:agent",
+    ttl: 60,
+  });
+  assert.match(ait, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+});
+
+test("S-M1: signAIT accepts a CryptoKey", async () => {
+  const kp = await generateKeypair();
+  const ait = await signAIT({
+    privateKey: kp.privateKey,
+    agentId: "axis:op:agent",
+    ttl: 60,
+  });
+  assert.match(ait, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+});
+
+test("S-M1: signAIT rejects null/undefined private key", async () => {
+  await assert.rejects(
+    () => signAIT({ privateKey: null, agentId: "axis:op:agent" }),
+    (err) => err.code === ERR.INVALID_INPUT && /privateKey is required/i.test(err.message),
+  );
+  await assert.rejects(
+    () => signAIT({ privateKey: undefined, agentId: "axis:op:agent" }),
+    (err) => err.code === ERR.INVALID_INPUT,
+  );
+});
+
+test("S-M1: signAIT rejects an object that is neither a JWK nor a CryptoKey", async () => {
+  await assert.rejects(
+    () => signAIT({ privateKey: { random: "stuff", noKty: true }, agentId: "axis:op:agent" }),
+    (err) => err.code === ERR.INVALID_INPUT && /CryptoKey or a JWK/i.test(err.message),
+  );
+});
+
+test("S-M1: signCanonical accepts JWK and CryptoKey symmetrically", async () => {
+  const kp = await generateKeypair();
+  const body = { a: 1, b: 2 };
+  const sigFromJwk = await signCanonical(kp.privateKeyJwk, body);
+  const sigFromKey = await signCanonical(kp.privateKey, body);
+  assert.equal(sigFromJwk, sigFromKey, "both detection paths should sign identically");
+});

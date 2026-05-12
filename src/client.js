@@ -36,44 +36,99 @@ import { AxisError, ERR } from "./errors.js";
 import { generateKeypair, signAIT, canonicalize, signCanonical } from "./crypto.js";
 
 export class AxisClient {
-  constructor({ registryUrl, apiKey = null, fetch: fetchImpl = null, userAgent = null } = {}) {
+  /**
+   * @param {object} opts
+   * @param {string} opts.registryUrl              Required. MUST be https:// unless allowInsecure is set.
+   * @param {string} [opts.apiKey]                 Registrar API key. Only sent on requireAuth=true paths (closes S-L1).
+   * @param {Function} [opts.fetch]                Optional fetch override (testing).
+   * @param {string} [opts.userAgent]              Optional User-Agent header value.
+   * @param {number} [opts.timeout=30000]          Per-request timeout in ms. AbortController-based. Pass 0 to disable. (Closes S-M2.)
+   * @param {boolean} [opts.allowInsecure=false]   Permit http:// registryUrl. Required for local dev against a non-TLS registry. (Closes S-L2.)
+   */
+  constructor({
+    registryUrl,
+    apiKey = null,
+    fetch: fetchImpl = null,
+    userAgent = null,
+    timeout = 30000,
+    allowInsecure = false,
+  } = {}) {
     if (!registryUrl) {
       throw new AxisError(ERR.INVALID_INPUT, "AxisClient: registryUrl is required");
+    }
+    if (!/^https?:\/\//i.test(registryUrl)) {
+      throw new AxisError(ERR.INVALID_INPUT, "AxisClient: registryUrl must start with https:// or http://");
+    }
+    if (!allowInsecure && /^http:\/\//i.test(registryUrl)) {
+      throw new AxisError(
+        ERR.INVALID_INPUT,
+        "AxisClient: registryUrl must use https:// (pass allowInsecure: true for local dev against a plaintext registry)"
+      );
+    }
+    if (typeof timeout !== "number" || timeout < 0) {
+      throw new AxisError(ERR.INVALID_INPUT, "AxisClient: timeout must be a non-negative number (ms); pass 0 to disable");
     }
     this.registryUrl = registryUrl.replace(/\/$/, "");
     this.apiKey = apiKey;
     this.userAgent = userAgent;
+    this.timeout = timeout;
     this._fetch = fetchImpl || ((...args) => fetch(...args));
   }
 
   // ── Internal HTTP helpers ────────────────────────────────────────────────
+
+  /**
+   * Build a fetch options object with an AbortController-based timeout. Returns
+   * { signal, clear } — caller MUST invoke clear() once the response resolves
+   * (or rejects) to prevent the timer from leaking.
+   */
+  _abortable() {
+    if (!this.timeout || typeof AbortController === "undefined") {
+      return { signal: undefined, clear: () => {} };
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("timeout")), this.timeout);
+    return { signal: controller.signal, clear: () => clearTimeout(timer) };
+  }
 
   async _request(path, { method = "GET", body, requireAuth = false, headers = {} } = {}) {
     const url = `${this.registryUrl}${path}`;
     const reqHeaders = { ...headers };
     if (body !== undefined) reqHeaders["Content-Type"] = "application/json";
     if (this.userAgent) reqHeaders["User-Agent"] = this.userAgent;
-    if (requireAuth || this.apiKey) {
+    // S-L1: only attach Authorization when the endpoint explicitly requires
+    // auth. Previously, having apiKey set caused the header to be sent on
+    // EVERY call, including public endpoints, leaking the key to the
+    // registry's public read paths (and to any intermediary that logs
+    // headers). Public endpoints discard the header server-side but the
+    // SDK should not be sending it in the first place.
+    if (requireAuth) {
       if (!this.apiKey) {
         throw new AxisError(ERR.API_KEY_REQUIRED, `Registrar API key required for ${method} ${path}`);
       }
       reqHeaders["Authorization"] = `Bearer ${this.apiKey}`;
     }
 
+    const { signal, clear } = this._abortable();
     let res;
     try {
       res = await this._fetch(url, {
         method,
         headers: reqHeaders,
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal,
       });
     } catch (e) {
+      clear();
+      // AbortError from our own timeout surfaces as REGISTRY_UNREACHABLE
+      // with a clear message; downstream errors stay wrapped the same way.
       throw new AxisError(
         ERR.REGISTRY_UNREACHABLE,
         `Registry unreachable at ${url}: ${e.message}`,
         { cause: e }
       );
     }
+    clear();
 
     let data = null;
     try {
@@ -102,11 +157,31 @@ export class AxisClient {
     return ERR.REGISTRY_HTTP;
   }
 
-  /** Normalize an AXIS identifier (accepts axis:op:slug, did:axis:prime:slug, or bare slug). */
+  /**
+   * Normalize an AXIS identifier to the slug used in URL paths.
+   * Accepts:
+   *   - `axis:{operator}:{slug}`                       (canonical agent ID, spec §4.1)
+   *   - `did:axis:{registry}:{slug}`                   (v0.1 DID form)
+   *   - `did:axis:{registry}:{operator}:{slug}`        (v0.2 DID form, operator-namespaced)
+   *   - bare `{slug}`                                  (already-normalized)
+   *
+   * S-L3: uses an explicit grammar instead of `.split(":").pop()`. The old
+   * approach silently truncated slugs containing characters that look like
+   * separators (none allowed by spec, but defensive against malformed input
+   * from non-spec-compliant registries).
+   */
   static _slugFromAgentId(id) {
     if (!id) return id;
-    if (id.startsWith("did:")) return id.split(":").pop();
-    if (id.includes(":")) return id.split(":").pop();
+    // did:axis:{registry}:{operator}:{slug} (v0.2) — five segments
+    const didV2 = /^did:axis:[^:]+:[^:]+:([^:]+)$/.exec(id);
+    if (didV2) return didV2[1];
+    // did:axis:{registry}:{slug} (v0.1) — four segments
+    const didV1 = /^did:axis:[^:]+:([^:]+)$/.exec(id);
+    if (didV1) return didV1[1];
+    // axis:{operator}:{slug} — three segments
+    const axisId = /^axis:[^:]+:([^:]+)$/.exec(id);
+    if (axisId) return axisId[1];
+    // Bare slug or unknown shape — return unchanged
     return id;
   }
 
@@ -141,29 +216,38 @@ export class AxisClient {
    * Verify an AXIS Identity Token via the registry.
    * Returns { valid, agent_id, operator_id, status, expires_at } on success.
    * Returns { valid: false, error } on failure — does NOT throw on a bad token.
-   * Only throws on transport / registry errors.
+   * Only throws on transport / registry errors (network failure, registry
+   * down, timeout).
+   *
+   * S-M3: routes through _request() so this call benefits from the same
+   * User-Agent header, AbortController timeout, and error-code surface as
+   * every other call. The {valid:false} semantic is preserved by catching
+   * AxisError sourced from non-2xx responses; transport errors still throw.
    */
   async verifyAIT(token) {
     if (!token) return { valid: false, error: "No token provided" };
-    const url = `${this.registryUrl}/verify?token=${encodeURIComponent(token)}`;
-    let res;
     try {
-      res = await this._fetch(url);
+      const data = await this._request(`/verify?token=${encodeURIComponent(token)}`);
+      if (!data || data.valid !== true) {
+        return { valid: false, error: (data && (data.error?.message || data.error)) || "Registry did not confirm valid" };
+      }
+      return {
+        valid: true,
+        agent_id: data.agent_id,
+        operator_id: data.operator_id,
+        status: data.status,
+        expires_at: data.expires_at,
+      };
     } catch (e) {
-      throw new AxisError(ERR.REGISTRY_UNREACHABLE, `Registry unreachable: ${e.message}`, { cause: e });
+      // Transport / timeout errors throw; bad-token (4xx) responses convert
+      // to {valid:false}. The distinction is the AxisError.code: anything
+      // other than REGISTRY_UNREACHABLE / REGISTRY_HTTP is a 4xx the
+      // registry produced about the token, which we treat as "not valid".
+      if (e instanceof AxisError && e.code !== ERR.REGISTRY_UNREACHABLE) {
+        return { valid: false, error: e.message };
+      }
+      throw e;
     }
-    let data = null;
-    try { data = await res.json(); } catch {}
-    if (!res.ok || !data || data.valid !== true) {
-      return { valid: false, error: (data && (data.error?.message || data.error)) || `HTTP ${res.status}` };
-    }
-    return {
-      valid: true,
-      agent_id: data.agent_id,
-      operator_id: data.operator_id,
-      status: data.status,
-      expires_at: data.expires_at,
-    };
   }
 
   /** GET /verify/:did — verify a DID (agent) identity without a token. */
