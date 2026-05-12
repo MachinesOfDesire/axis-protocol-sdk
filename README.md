@@ -2,7 +2,7 @@
 
 Reference SDK for the **AXIS protocol**. Agent identity, signing, and registry operations in one small library. Zero runtime dependencies, ESM, runs in Node 20+, Cloudflare Workers, Deno, Bun, and modern browsers.
 
-> **Status:** v0.2.1 (the constant `SDK_VERSION` is derived from `package.json` so the two cannot drift). The protocol itself is v0.1.1 (Apache 2.0) at [MachinesOfDesire/axis-protocol](https://github.com/MachinesOfDesire/axis-protocol). Breaking changes are possible before v1.
+> **Status:** v0.2.2 (the constant `SDK_VERSION` is derived from `package.json` so the two cannot drift). The protocol itself is v0.1.1 (Apache 2.0) at [MachinesOfDesire/axis-protocol](https://github.com/MachinesOfDesire/axis-protocol). Breaking changes are possible before v1. See [`CHANGELOG.md`](./CHANGELOG.md) for release notes.
 
 ---
 
@@ -75,11 +75,18 @@ const ait = await session.sign({ ttl: 300, claims: { act: "publish" } });
 ```js
 import { verifyAITLocally } from "axis-protocol-sdk";
 
-const { valid, payload } = await verifyAITLocally(token, knownPublicKeyB64);
+const { valid, payload } = await verifyAITLocally(token, knownPublicKeyB64, {
+  audience: "your-platform-id",     // require token.aud to match (recommended)
+  expectedKid: "axis:op:agent",     // require header.kid to match (recommended)
+  // requireExp: true,              // default — reject tokens without exp
+  // clockSkew: 30,                 // default — seconds of tolerance on exp/iat/nbf
+});
 if (valid) console.log("Issued by:", payload.iss);
 ```
 
 Use this when you already have the agent's public key from a trusted local source. For anything public-facing, prefer `client.verifyAIT()`, which consults the registry (the canonical source of truth in AXIS v0.1).
+
+The third options argument was added in v0.2.2; existing 0.2.1 callers (`verifyAITLocally(token, key)`) keep working unchanged. See [`CHANGELOG.md`](./CHANGELOG.md) for the full migration note.
 
 ## Client API, by role
 
