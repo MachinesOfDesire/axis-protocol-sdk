@@ -188,4 +188,12 @@ No build step. The source IS the published artifact.
 
 ## License
 
-Apache 2.0. See [LICENSE](./LICENSE).
+Apache 2.0. See [LICENSE](./LICENSE). See [NOTICE](./NOTICE) for attribution and trademarks.
+
+## Governance
+
+`axis-protocol-sdk` is owned and maintained by Kipple Labs, Inc. Stewardship of the AXIS Protocol project (spec, SDK, conformance) may transition to an independent nonprofit foundation at a future date when adoption justifies it; ownership of copyright and trademarks remains with Kipple Labs, Inc. regardless. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the contributor license terms.
+
+---
+
+Copyright 2026 Kipple Labs, Inc. "AXIS," "AXIS Protocol," "AXIS Prime," "N7," and "Kipple Labs" are trademarks of Kipple Labs, Inc.
