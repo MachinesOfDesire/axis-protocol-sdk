@@ -21,7 +21,7 @@
     "ed25519",
     "sdk"
   ],
-  "author": "Josh Ashcroft",
+  "author": "Kipple Labs, Inc.",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=20.0.0"
@@ -38,6 +38,8 @@
     "src/",
     "examples/",
     "README.md",
-    "LICENSE"
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE"
   ]
 }
