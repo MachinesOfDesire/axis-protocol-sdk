@@ -9,3 +9,6 @@ coverage/
 dist/
 build/
 *.tgz
+
+# Local maintainer files
+CLAUDE.md
