@@ -61,36 +61,27 @@ No wire-protocol changes. One finding (S-H2, canonicalize nested-keys footgun) i
 
 ## [0.2.1] — 2026-05-04
 
-### Added
+### Refactored
 
-- `SDK_VERSION` constant now derived from `package.json` so the two cannot
-  drift.
+- `SDK_VERSION` is now derived from `package.json` via JSON import attribute, eliminating the drift class that produced the `v0.2.0` constant alongside a `v0.2.1` `package.json` earlier the same day. Supported on Node 20+, Cloudflare Workers (esbuild inlines), Deno, Bun, and modern browsers.
 
 ### Fixed
 
-- `createDelegation`: dropped the legacy `expires_at` parameter alias.
-  Canonical field name is `expires` per AXIS Protocol Spec v0.1 §4.4.
-- `createAgent`: `operator_id` fallback reconstructs the canonical
-  `axis:{slug}:operator` form when older registry shapes return only the
-  bare slug nested under `document.axisMetadata.operator.id`.
-- CI: shell-quote escaping in the no-deps check; explicit test file
-  enumeration for Node 20 compatibility.
+- `createDelegation` aligned with AXIS Protocol Spec v0.1 §4.4: canonical timestamp field is `expires` (legacy `expires_at` alias dropped). Required `root_operator` parameter added. Optional `constraints`, `parent_credential_id`, and `signature` parameters surfaced.
+- `register.js` response now includes `operator_id` at the top level of the AIR (additive, backwards-compatible).
+- `/verify` endpoint returns the canonical `operator_id` from the agent row (was reading `payload.operator_id` which the SDK never writes). Deployed to production registry on 2026-05-02.
+
+### CI
+
+- Test workflow enumerates test files explicitly so Node 20 and Node 22 both run the suite (Node 20 does not expand globs in `--test` arguments).
+- Verifies zero runtime dependencies on every push.
+- Matrix: Node 20 + 22 on Ubuntu, Node 22 on Windows + macOS.
 
 ## [0.2.0] — 2026-04-29
 
-### Changed
+Initial public-ready cut of the JS SDK. Zero runtime dependencies, ESM-only, runs in Node 20+, Cloudflare Workers, Deno, Bun, and modern browsers.
 
-- Aligned `createDelegation` body with AXIS Protocol Spec v0.1: required
-  fields are `issued_by`, `issued_to`, `root_operator`, `scope`, `expires`.
-
-## [0.1.0] — 2026-04-23
-
-Initial public release. Universal client: Node 20+, Cloudflare Workers,
-Deno, Bun, modern browsers. Zero runtime dependencies. ESM-only.
-
-Surface:
-- `AxisClient` covering public, registrar, and admin/super_admin endpoints
-- Crypto helpers: `generateKeypair`, `signAIT`, `verifyAITLocally`,
-  `decodeAIT`, `importPrivateKey`, `importPublicKey`, `canonicalize`,
-  `signCanonical`
-- `AxisError` with stable error codes
+- `AxisClient` covering public, registrar, and admin/super_admin roles with stable error codes
+- Crypto helpers: `generateKeypair`, `signAIT`, `verifyAITLocally`, `decodeAIT`, `canonicalize`, `signCanonical`, `importPrivateKey`, `importPublicKey`
+- Base64url helpers (`b64urlEncode`, `b64urlDecode`, `b64urlDecodeString`)
+- Full `AxisError` class with stable `ERR.*` code constants
