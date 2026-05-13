@@ -91,7 +91,7 @@ export class AxisClient {
     return { signal: controller.signal, clear: () => clearTimeout(timer) };
   }
 
-  async _request(path, { method = "GET", body, requireAuth = false, headers = {} } = {}) {
+  async _request(path, { method = "GET", body, requireAuth = false, headers = {}, presentingAIT = null } = {}) {
     const url = `${this.registryUrl}${path}`;
     const reqHeaders = { ...headers };
     if (body !== undefined) reqHeaders["Content-Type"] = "application/json";
@@ -102,7 +102,19 @@ export class AxisClient {
     // registry's public read paths (and to any intermediary that logs
     // headers). Public endpoints discard the header server-side but the
     // SDK should not be sending it in the first place.
-    if (requireAuth) {
+    //
+    // WC-M2 (v0.2.3): a caller may pass `presentingAIT` to send a per-call
+    // Bearer header carrying an AIT (rather than the constructor-time apiKey).
+    // Used by consumers like axis-comments-ghost to unlock the presentation
+    // layer on public-endpoint reads — per AXIS Protocol v0.1.1 §5.2,
+    // presenting a valid AIT in the Authorization header unlocks display
+    // name, verification tier, and other presentation-layer fields. The
+    // presenting AIT takes precedence over the registrar apiKey if both
+    // happen to apply; the typical use is a public client (no apiKey) that
+    // wants the presentation-layer unlock for a single resolve call.
+    if (presentingAIT) {
+      reqHeaders["Authorization"] = `Bearer ${presentingAIT}`;
+    } else if (requireAuth) {
       if (!this.apiKey) {
         throw new AxisError(ERR.API_KEY_REQUIRED, `Registrar API key required for ${method} ${path}`);
       }
@@ -194,22 +206,44 @@ export class AxisClient {
     return this._request("/.well-known/axis-access");
   }
 
-  /** GET /agents/:id — resolve an agent identity record by axis_id, did, or slug. */
-  async resolveAgent(agentIdOrSlug) {
+  /**
+   * GET /agents/:id — resolve an agent identity record by axis_id, did, or slug.
+   *
+   * @param {string} agentIdOrSlug
+   * @param {object} [opts]
+   * @param {string} [opts.presentingAIT]  When supplied, sent as Bearer to unlock
+   *   the registry's presentation layer (display_name, verification_tier, etc.)
+   *   per AXIS Protocol v0.1.1 §5.2. Use this when a verifier wants the
+   *   presentation-layer fields after verifying an AIT from a caller.
+   *   Without it, only the public layer is returned. Added in SDK v0.2.3.
+   */
+  async resolveAgent(agentIdOrSlug, { presentingAIT } = {}) {
     const slug = AxisClient._slugFromAgentId(agentIdOrSlug);
-    return this._request(`/agents/${encodeURIComponent(slug)}`);
+    return this._request(`/agents/${encodeURIComponent(slug)}`, { presentingAIT });
   }
 
-  /** GET /resolve/:did — resolve a DID to a DID Document. */
-  async resolveDid(did) {
+  /**
+   * GET /resolve/:did — resolve a DID to a DID Document.
+   *
+   * @param {string} did
+   * @param {object} [opts]
+   * @param {string} [opts.presentingAIT]  See resolveAgent. Added in SDK v0.2.3.
+   */
+  async resolveDid(did, { presentingAIT } = {}) {
     if (!did) throw new AxisError(ERR.INVALID_INPUT, "did is required");
-    return this._request(`/resolve/${encodeURIComponent(did)}`);
+    return this._request(`/resolve/${encodeURIComponent(did)}`, { presentingAIT });
   }
 
-  /** GET /operators/:id — get an operator record. */
-  async getOperator(operatorId) {
+  /**
+   * GET /operators/:id — get an operator record.
+   *
+   * @param {string} operatorId
+   * @param {object} [opts]
+   * @param {string} [opts.presentingAIT]  See resolveAgent. Added in SDK v0.2.3.
+   */
+  async getOperator(operatorId, { presentingAIT } = {}) {
     if (!operatorId) throw new AxisError(ERR.INVALID_INPUT, "operatorId is required");
-    return this._request(`/operators/${encodeURIComponent(operatorId)}`);
+    return this._request(`/operators/${encodeURIComponent(operatorId)}`, { presentingAIT });
   }
 
   /**
@@ -225,11 +259,23 @@ export class AxisClient {
    * AxisError sourced from non-2xx responses; transport errors still throw.
    */
   async verifyAIT(token) {
-    if (!token) return { valid: false, error: "No token provided" };
+    if (!token) return { valid: false, code: "missing_token", error: "No token provided" };
     try {
       const data = await this._request(`/verify?token=${encodeURIComponent(token)}`);
       if (!data || data.valid !== true) {
-        return { valid: false, error: (data && (data.error?.message || data.error)) || "Registry did not confirm valid" };
+        // v0.2.3: registry now emits a stable `code` field on valid:false
+        // responses (invalid_signature, token_expired, agent_revoked,
+        // agent_suspended). Surface it directly so callers can branch on
+        // a stable machine-readable value instead of regex-matching error
+        // strings. Older registries that don't emit code: response will
+        // have code === undefined; callers must fall back to error-string
+        // classification in that case.
+        return {
+          valid: false,
+          code: data?.code || null,
+          error: data && (data.error?.message || data.error || data.reason) || "Registry did not confirm valid",
+          agent_id: data?.agent_id || null,
+        };
       }
       return {
         valid: true,

@@ -4,6 +4,57 @@ All notable changes to `axis-protocol-sdk`. Format follows [Keep a Changelog](ht
 
 `SDK_VERSION` constant is derived from `package.json` so the two cannot drift.
 
+## [0.2.3] — 2026-05-12
+
+Two coordinated fixes that close axis-comments WC-M2 and WC-L4 on the SDK side. Both purely additive; existing 0.2.2 callers unchanged.
+
+### Added — `presentingAIT` option on public-endpoint methods (WC-M2)
+
+`resolveAgent`, `resolveDid`, and `getOperator` accept a `{ presentingAIT: string }` option. When supplied, the SDK sends `Authorization: Bearer <ait>` on the request, which causes the registry to return the presentation layer (display_name, verification_tier, etc.) per AXIS Protocol v0.1.1 §5.2.
+
+```js
+// Verify an AIT, then fetch presentation-layer fields for that agent.
+const verify = await client.verifyAIT(token);
+if (verify.valid) {
+  const agent = await client.resolveAgent(verify.agent_id, { presentingAIT: token });
+  console.log(agent.display_name, agent.operator_verification_tier);
+}
+```
+
+This replaces the v0.2.1 workaround where callers (e.g. axis-comments-ghost) constructed a per-call `AxisClient` with the AIT in the `apiKey` slot to flip the Bearer header. The workaround broke silently in v0.2.2's S-L1 hardening (S-L1 stopped sending Authorization on public endpoints unconditionally). `presentingAIT` is the correct API.
+
+Negative-test coverage: `presentingAIT` does NOT leak the constructor-time `apiKey` even when both are set on the same client; the AIT takes precedence for that call.
+
+### Added — `code` field surfaced on `verifyAIT` valid:false responses (WC-L4)
+
+`verifyAIT(token)` now returns a structured `code` alongside the existing `error` string:
+
+```js
+const result = await client.verifyAIT(token);
+// {
+//   valid: false,
+//   code: "token_expired",  // or "invalid_signature", "agent_revoked", "agent_suspended", etc.
+//   error: "Token expired",
+//   agent_id: "axis:op:agent",
+// }
+```
+
+Codes mirror what the registry emits (axis-registry v0.1.3+). For older registries that don't yet emit `code`, the field is `null` and callers fall back to error-string classification. The no-token case (`verifyAIT("")`) returns `code: "missing_token"` immediately without a registry call.
+
+This closes WC-L4 on the SDK side. The registry-side change (axis-registry PR #18) and the axis-comments-ghost-side change (consume `code` instead of regex-matching the reason string) ship in coordination.
+
+### Tests
+
+- 7 new tests in `test/client.test.js` covering both additions
+- Total: 71 tests, 0 failures (was 64 at 0.2.2)
+
+### Migration notes (0.2.2 → 0.2.3)
+
+Both changes are additive. Existing callers don't need to change anything.
+
+- Code that needs presentation-layer data after AIT verification: use `presentingAIT` on the resolve call. The v0.2.1 apiKey-slot workaround is broken under 0.2.2+ and should be replaced.
+- Code that classifies `verifyAIT` failures: prefer `result.code` (machine-readable) over `result.error` (free text). Keep a regex fallback for the case where `code` is null (older registries).
+
 ## [0.2.2] — 2026-05-12
 
 Security hardening pass landing **all eight** findings from the 2026-05-08/09 security review that are not deferred. Mostly backward-compatible with 0.2.1 callers; two consumer-visible behavioral changes are documented under "Migration notes" with explicit escape hatches.

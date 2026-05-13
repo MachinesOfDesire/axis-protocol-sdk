@@ -415,3 +415,105 @@ test("S-M3: verifyAIT still throws on transport failure (REGISTRY_UNREACHABLE)",
     (err) => err instanceof AxisError && err.code === ERR.REGISTRY_UNREACHABLE,
   );
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// v0.2.3 — WC-M2 presentingAIT + WC-L4 surfacing structured code on verifyAIT
+// ────────────────────────────────────────────────────────────────────────────
+
+test("WC-M2: resolveAgent without presentingAIT sends no Authorization header", async () => {
+  let observedAuth = "MISSING";
+  const fakeFetch = async (_url, opts) => {
+    observedAuth = (opts && opts.headers && opts.headers["Authorization"]) || "MISSING";
+    return { ok: true, json: async () => ({ agent_id: "axis:op:a", status: "active" }) };
+  };
+  const c = new AxisClient({ registryUrl: "https://r.example", fetch: fakeFetch });
+  await c.resolveAgent("axis:op:a");
+  assert.equal(observedAuth, "MISSING");
+});
+
+test("WC-M2: resolveAgent with presentingAIT sends the AIT as Bearer", async () => {
+  let observedAuth = "MISSING";
+  const fakeFetch = async (_url, opts) => {
+    observedAuth = (opts && opts.headers && opts.headers["Authorization"]) || "MISSING";
+    return {
+      ok: true,
+      json: async () => ({ agent_id: "axis:op:a", status: "active", display_name: "Mira" }),
+    };
+  };
+  const c = new AxisClient({ registryUrl: "https://r.example", fetch: fakeFetch });
+  const r = await c.resolveAgent("axis:op:a", { presentingAIT: "fake.ait.token" });
+  assert.equal(observedAuth, "Bearer fake.ait.token");
+  assert.equal(r.display_name, "Mira");
+});
+
+test("WC-M2: presentingAIT does NOT leak the registrar apiKey when client has one", async () => {
+  let observedAuth = "MISSING";
+  const fakeFetch = async (_url, opts) => {
+    observedAuth = (opts && opts.headers && opts.headers["Authorization"]) || "MISSING";
+    return { ok: true, json: async () => ({}) };
+  };
+  // Client constructed with a registrar apiKey, then makes a presenting call.
+  // The Bearer header must carry the AIT, NOT the apiKey.
+  const c = new AxisClient({
+    registryUrl: "https://r.example",
+    apiKey: "secret-registrar-key",
+    fetch: fakeFetch,
+  });
+  await c.resolveAgent("axis:op:a", { presentingAIT: "fake.ait.token" });
+  assert.equal(observedAuth, "Bearer fake.ait.token");
+  // Negative assertion: the registrar key must not appear
+  assert.ok(!observedAuth.includes("secret-registrar-key"));
+});
+
+test("WC-M2: resolveDid + getOperator both accept presentingAIT", async () => {
+  const seen = { resolve: "MISSING", op: "MISSING" };
+  const fakeFetch = async (url, opts) => {
+    const auth = (opts && opts.headers && opts.headers["Authorization"]) || "MISSING";
+    if (url.includes("/resolve/")) seen.resolve = auth;
+    else if (url.includes("/operators/")) seen.op = auth;
+    return { ok: true, json: async () => ({}) };
+  };
+  const c = new AxisClient({ registryUrl: "https://r.example", fetch: fakeFetch });
+  await c.resolveDid("did:axis:prime:op:a", { presentingAIT: "T1" });
+  await c.getOperator("op-abc", { presentingAIT: "T2" });
+  assert.equal(seen.resolve, "Bearer T1");
+  assert.equal(seen.op, "Bearer T2");
+});
+
+test("WC-L4: verifyAIT surfaces code from valid:false response", async () => {
+  const fakeFetch = async () => ({
+    ok: true,
+    json: async () => ({
+      valid: false,
+      code: "token_expired",
+      agent_id: "axis:op:a",
+      reason: "Token expired",
+      expired_at: "2026-01-01T00:00:00Z",
+    }),
+  });
+  const c = new AxisClient({ registryUrl: "https://r.example", fetch: fakeFetch });
+  const r = await c.verifyAIT("expired.token");
+  assert.equal(r.valid, false);
+  assert.equal(r.code, "token_expired");
+  assert.match(r.error, /expired/i);
+  assert.equal(r.agent_id, "axis:op:a");
+});
+
+test("WC-L4: verifyAIT returns null code on older registries that omit it", async () => {
+  const fakeFetch = async () => ({
+    ok: true,
+    json: async () => ({ valid: false, reason: "Invalid signature" }),
+  });
+  const c = new AxisClient({ registryUrl: "https://r.example", fetch: fakeFetch });
+  const r = await c.verifyAIT("bad.sig");
+  assert.equal(r.valid, false);
+  assert.equal(r.code, null);
+  assert.match(r.error, /signature/i);
+});
+
+test("WC-L4: verifyAIT no-token call returns code 'missing_token'", async () => {
+  const c = new AxisClient({ registryUrl: "https://r.example", fetch: async () => ({}) });
+  const r = await c.verifyAIT("");
+  assert.equal(r.valid, false);
+  assert.equal(r.code, "missing_token");
+});
