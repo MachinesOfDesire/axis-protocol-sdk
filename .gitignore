@@ -12,3 +12,7 @@ build/
 
 # Local maintainer files
 CLAUDE.md
+
+# package-lock is local-machine-specific and zero-dependency for this
+# package; not worth tracking.
+package-lock.json
