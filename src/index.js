@@ -38,9 +38,14 @@ export {
   importPublicKey,
   canonicalize,
   signCanonical,
+  signDelegation,
 } from "./crypto.js";
+export { jcsCanonicalize, jcsCanonicalizeBytes } from "./jcs.js";
 export { b64urlEncode, b64urlDecode, b64urlDecodeString } from "./base64url.js";
 export { AxisError, ERR } from "./errors.js";
 
 export const SDK_VERSION = pkg.version;
-export const AXIS_PROTOCOL_VERSION = "0.1";
+// JCS canonicalization, the DC signer, and the proofType'd registration proof
+// are AXIS Protocol v0.2 §6.1 features (SDK v0.3). The client still
+// interoperates with v0.1 registries (the registry accepts both proof regimes).
+export const AXIS_PROTOCOL_VERSION = "0.2";

@@ -12,6 +12,7 @@
 
 import { b64urlEncode, b64urlDecode, b64urlDecodeString } from "./base64url.js";
 import { AxisError, ERR } from "./errors.js";
+import { jcsCanonicalize } from "./jcs.js";
 
 /**
  * Generate a fresh Ed25519 keypair for an AXIS agent (or operator).
@@ -145,17 +146,21 @@ async function _coerceToCryptoKey(privateKey, caller) {
 }
 
 /**
- * Canonicalize a plain object the way the registry expects for proof-of-key
- * ownership: JSON.stringify with top-level keys sorted alphabetically.
+ * @deprecated LEGACY v0.1 canonicalization. Superseded by RFC 8785 JCS
+ * (`jcsCanonicalize` in ./jcs.js) as of AXIS Protocol v0.2 §6.1 / SDK v0.3.
+ * Kept exported ONLY so callers that still need to reproduce a pre-JCS
+ * signature (e.g. to re-verify an old legacy proof) can do so. Do NOT use for
+ * new signing — `signCanonical` now uses JCS.
  *
- * The registry's /register handler does:
- *   const canonical = JSON.stringify(proofInput, Object.keys(proofInput).sort());
+ * Canonicalize a plain object the v0.1 way: JSON.stringify with top-level keys
+ * sorted alphabetically.
  *
- * This mirrors that exactly so signatures produced here verify there.
+ *   JSON.stringify(obj, Object.keys(obj).sort())
  *
- * ⚠️ Footgun: the second argument to JSON.stringify, when an array, is a
- * REPLACER that *filters which keys appear at every nesting level*. It does
- * NOT recursively sort nested object keys. Two consequences:
+ * ⚠️ Footgun (the reason v0.2 moved to JCS): the second argument to
+ * JSON.stringify, when an array, is a REPLACER that *filters which keys appear
+ * at every nesting level*. It does NOT recursively sort nested object keys.
+ * Two consequences:
  *
  *   1. Nested object keys appear in source-iteration order (V8: insertion-
  *      order for string keys), not sorted order. Two clients that build the
@@ -167,11 +172,8 @@ async function _coerceToCryptoKey(privateKey, caller) {
  *      '{"a":1,"b":{}}' — the inner `c` is filtered out because `c` isn't
  *      in the top-level key list.
  *
- * The registry uses the identical broken algorithm, so wire-format compat is
- * preserved. Until both sides upgrade to RFC 8785 JCS, callers must keep
- * proof bodies flat (no nested objects whose values matter for the signature)
- * and use stable insertion order. AXIS Protocol v0.2 will likely formalize
- * a strict JCS canonicalization; this function will be deprecated then.
+ * The registry still accepts legacy proofs (proofType absent) for back-compat,
+ * but verifies JCS first. New proofs should be JCS.
  */
 export function canonicalize(obj) {
   if (!obj || typeof obj !== "object") {
@@ -184,17 +186,69 @@ export function canonicalize(obj) {
  * Sign a canonical-encoded body and return a base64url signature string.
  * Used for the `proof.proofValue` field on agent registration.
  *
+ * As of SDK v0.3 / AXIS Protocol v0.2 §6.1 this canonicalizes with RFC 8785
+ * JCS (`jcsCanonicalize`), NOT the legacy top-level-sort `canonicalize`. The
+ * registry's verifyCanonicalProof tries JCS first, so this signature verifies
+ * there whether or not the wire proof carries `proofType: "jcs-eddsa-2026"`.
+ * Callers SHOULD send the proof with that proofType (see AxisClient.createAgent)
+ * so the registry takes the JCS path explicitly rather than the legacy
+ * fall-through.
+ *
  * @param {CryptoKey|object} privateKey  Ed25519 private key (CryptoKey or JWK)
  * @param {object} body                  Object to canonicalize + sign
  * @returns {Promise<string>}            base64url-encoded Ed25519 signature
  */
 export async function signCanonical(privateKey, body) {
   const key = await _coerceToCryptoKey(privateKey, "signCanonical");
-  const canonical = canonicalize(body);
+  const canonical = jcsCanonicalize(body);
   const sig = new Uint8Array(
     await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(canonical))
   );
   return b64urlEncode(sig);
+}
+
+/**
+ * Sign a DelegationCredential (DC) document — Option A, AXIS Protocol v0.2
+ * §4.4 / §8. The issuer signs the RFC 8785 JCS canonicalization of the
+ * complete DC document MINUS its `proof` field, with Ed25519. Returns the DC
+ * with a W3C Data-Integrity proof envelope attached.
+ *
+ * The bytes signed are `jcsCanonicalize(dc)` where `dc` is passed WITHOUT a
+ * proof field — exactly what the registry's verifyDelegationProof recomputes
+ * (it strips `proof` then JCS-canonicalizes), so the proofValue verifies there
+ * byte-for-byte. Mirrors the registry's buildSignedDelegation test helper.
+ *
+ * @param {CryptoKey|object} privateKey  Issuer's Ed25519 private key (CryptoKey or JWK)
+ * @param {object} dc                    DC document fields, WITHOUT a `proof` field.
+ *                                       Must include `issued_by` (used for verificationMethod).
+ * @returns {Promise<object>}            `{ ...dc, proof: { ... } }`
+ */
+export async function signDelegation(privateKey, dc) {
+  if (!dc || typeof dc !== "object") {
+    throw new AxisError(ERR.INVALID_INPUT, "signDelegation: dc must be an object");
+  }
+  if (!dc.issued_by) {
+    throw new AxisError(ERR.INVALID_INPUT, "signDelegation: dc.issued_by is required (used for verificationMethod)");
+  }
+  if ("proof" in dc) {
+    throw new AxisError(ERR.INVALID_INPUT, "signDelegation: dc must NOT already carry a proof field");
+  }
+  const key = await _coerceToCryptoKey(privateKey, "signDelegation");
+  const canonical = jcsCanonicalize(dc);
+  const sig = new Uint8Array(
+    await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(canonical))
+  );
+  const proofValue = b64urlEncode(sig);
+  return {
+    ...dc,
+    proof: {
+      type: "Ed25519Signature2020",
+      proofType: "jcs-eddsa-2026",
+      verificationMethod: `${dc.issued_by}#key-1`,
+      proofPurpose: "assertionMethod",
+      proofValue,
+    },
+  };
 }
 
 /**
