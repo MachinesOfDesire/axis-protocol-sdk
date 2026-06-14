@@ -343,7 +343,9 @@ export class AxisClient {
    * @param {string} opts.publicKey                             Ed25519 public key, base64url
    * @param {{name?: string, description?: string}} [opts.metadata]
    * @param {object} [opts.service]                             Optional service endpoint spec
-   * @param {{proofValue: string}} [opts.proof]                 Optional Ed25519 proof of key ownership
+   * @param {{proofValue: string, proofType?: string}} [opts.proof]  Optional Ed25519 proof of key
+   *   ownership. v0.2+ proofs carry `proofType: "jcs-eddsa-2026"` (JCS canonicalization); the
+   *   registry also accepts a proof with proofType absent (legacy v0.1 regime, JCS-first verify).
    */
   async registerAgent({ operator, publicKey, metadata, service, proof } = {}) {
     if (!operator || (!operator.email && !operator.domain)) {
@@ -548,12 +550,17 @@ export class AxisClient {
     if (metadata) proofBody.metadata = metadata;
     if (service) proofBody.service = service;
     const proofValue = await signCanonical(keypair.privateKey, proofBody);
+    // v0.2+ (SDK v0.3): signCanonical now canonicalizes with RFC 8785 JCS, so
+    // we advertise `proofType: "jcs-eddsa-2026"` on the wire. The registry
+    // accepts both regimes (proofType absent ⇒ legacy, JCS-first), but sending
+    // the proofType makes the registry take the JCS verification path
+    // explicitly rather than relying on the legacy fall-through.
     const record = await this.registerAgent({
       operator,
       publicKey: keypair.publicKeyB64,
       metadata,
       service,
-      proof: { proofValue },
+      proof: { proofType: "jcs-eddsa-2026", proofValue },
     });
     const agent_id = record.axis_id || record.did;
     // Surface operator_id at the top level of the session for ergonomic

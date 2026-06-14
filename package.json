@@ -1,6 +1,6 @@
 {
   "name": "axis-protocol-sdk",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Reference SDK for the AXIS protocol. Agent identity, signing, and registry operations. Zero runtime dependencies; runs in Node 20+, Cloudflare Workers, and modern browsers.",
   "type": "module",
   "main": "src/index.js",
@@ -8,10 +8,11 @@
     ".": "./src/index.js",
     "./client": "./src/client.js",
     "./crypto": "./src/crypto.js",
+    "./jcs": "./src/jcs.js",
     "./errors": "./src/errors.js"
   },
   "scripts": {
-    "test": "node --test test/client.test.js test/crypto.test.js"
+    "test": "node --test test/client.test.js test/crypto.test.js test/jcs.test.js"
   },
   "keywords": [
     "axis",

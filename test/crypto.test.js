@@ -13,6 +13,7 @@ import {
   canonicalize,
   signCanonical,
 } from "../src/crypto.js";
+import { jcsCanonicalize } from "../src/jcs.js";
 import { b64urlDecode } from "../src/base64url.js";
 import { AxisError, ERR } from "../src/errors.js";
 
@@ -116,7 +117,7 @@ test("canonicalize throws on non-object", () => {
   assert.throws(() => canonicalize(null), (err) => err.code === ERR.INVALID_INPUT);
 });
 
-test("signCanonical + verify roundtrip matches registry proof format", async () => {
+test("signCanonical + verify roundtrip matches registry proof format (JCS, v0.3)", async () => {
   const kp = await generateKeypair();
   const body = {
     operator: { email: "ops@example.com" },
@@ -125,10 +126,11 @@ test("signCanonical + verify roundtrip matches registry proof format", async () 
   };
   const sig = await signCanonical(kp.privateKey, body);
 
-  // Verify the signature matches what the registry would verify.
-  // Registry does: verifyEd25519Signature(publicKey, canonical, proofValue)
-  // which internally does Ed25519 verify over TextEncoder().encode(canonical).
-  const canonical = canonicalize(body);
+  // v0.3: signCanonical now canonicalizes with RFC 8785 JCS, matching the
+  // registry's verifyCanonicalProof (which tries JCS first). The registry does
+  // verifyEd25519Signature(publicKey, jcsCanonicalize(body), proofValue),
+  // i.e. Ed25519 verify over TextEncoder().encode(jcsCanonicalize(body)).
+  const canonical = jcsCanonicalize(body);
   const pub = await importPublicKey(kp.publicKeyB64);
   const ok = await crypto.subtle.verify(
     "Ed25519",
@@ -137,6 +139,16 @@ test("signCanonical + verify roundtrip matches registry proof format", async () 
     new TextEncoder().encode(canonical),
   );
   assert.equal(ok, true);
+
+  // Legacy canonicalize would have stripped the nested `metadata.name`, so a
+  // verify over the legacy bytes must FAIL — proving we moved off the v0.1 form.
+  const legacyOk = await crypto.subtle.verify(
+    "Ed25519",
+    pub,
+    b64urlDecode(sig),
+    new TextEncoder().encode(canonicalize(body)),
+  );
+  assert.equal(legacyOk, false);
 });
 
 test("importPublicKey rejects keys of wrong length", async () => {
