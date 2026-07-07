@@ -146,40 +146,36 @@ async function _coerceToCryptoKey(privateKey, caller) {
 }
 
 /**
- * @deprecated LEGACY v0.1 canonicalization. Superseded by RFC 8785 JCS
- * (`jcsCanonicalize` in ./jcs.js) as of AXIS Protocol v0.2 §6.1 / SDK v0.3.
- * Kept exported ONLY so callers that still need to reproduce a pre-JCS
- * signature (e.g. to re-verify an old legacy proof) can do so. Do NOT use for
- * new signing — `signCanonical` now uses JCS.
+ * Canonicalize a plain object to its RFC 8785 JCS string form — sorted keys at
+ * EVERY nesting level, arrays preserved in order, `undefined`-valued members
+ * omitted. Delegates to `jcsCanonicalize` (./jcs.js), so this produces the
+ * exact bytes `signCanonical` / `signDelegation` sign and the registry
+ * verifies.
  *
- * Canonicalize a plain object the v0.1 way: JSON.stringify with top-level keys
- * sorted alphabetically.
+ * History: through SDK v0.3.0 this exported the legacy v0.1 form,
+ * `JSON.stringify(obj, Object.keys(obj).sort())`. The array second argument
+ * to JSON.stringify is a REPLACER that *filters which keys appear at every
+ * nesting level* — it does not recursively sort. Any nested key whose name
+ * didn't also appear at the top level was stripped entirely:
+ * `canonicalize({a: 1, b: {c: 2}})` yielded `'{"a":1,"b":{}}'`. A consumer
+ * who canonicalized a nested document (e.g. a DelegationCredential with a
+ * `constraints` object) with this function therefore signed bytes that don't
+ * match the document, producing a proof that fails registry verification.
+ * As of v0.3.1 this is the JCS form; to reproduce a pre-JCS legacy signature
+ * byte-for-byte, inline the old expression directly.
  *
- *   JSON.stringify(obj, Object.keys(obj).sort())
+ * Rejects non-object inputs (including null) — signed canonical bodies in
+ * AXIS are always objects. For canonicalizing arbitrary JSON-safe values,
+ * use `jcsCanonicalize` directly.
  *
- * ⚠️ Footgun (the reason v0.2 moved to JCS): the second argument to
- * JSON.stringify, when an array, is a REPLACER that *filters which keys appear
- * at every nesting level*. It does NOT recursively sort nested object keys.
- * Two consequences:
- *
- *   1. Nested object keys appear in source-iteration order (V8: insertion-
- *      order for string keys), not sorted order. Two clients that build the
- *      same conceptual object with different key insertion orders inside a
- *      nested field produce different canonical bytes and different
- *      signatures.
- *   2. Any nested key whose name does NOT also appear at the top level is
- *      stripped entirely. e.g. canonicalize({a: 1, b: {c: 2}}) yields
- *      '{"a":1,"b":{}}' — the inner `c` is filtered out because `c` isn't
- *      in the top-level key list.
- *
- * The registry still accepts legacy proofs (proofType absent) for back-compat,
- * but verifies JCS first. New proofs should be JCS.
+ * @param {object} obj   Object to canonicalize
+ * @returns {string}     The canonical JSON string
  */
 export function canonicalize(obj) {
   if (!obj || typeof obj !== "object") {
     throw new AxisError(ERR.INVALID_INPUT, "canonicalize: expected an object");
   }
-  return JSON.stringify(obj, Object.keys(obj).sort());
+  return jcsCanonicalize(obj);
 }
 
 /**

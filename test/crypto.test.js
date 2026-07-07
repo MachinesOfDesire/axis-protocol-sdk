@@ -117,6 +117,82 @@ test("canonicalize throws on non-object", () => {
   assert.throws(() => canonicalize(null), (err) => err.code === ERR.INVALID_INPUT);
 });
 
+test("canonicalize recurses into nested objects (regression: v0.1 form emptied them)", () => {
+  // The pre-v0.3.1 canonicalize returned '{"a":{},"b":1}' here — the array
+  // replacer stripped every nested key not also present at the top level.
+  const out = canonicalize({ b: 1, a: { d: false, c: "x" } });
+  assert.equal(out, '{"a":{"c":"x","d":false},"b":1}');
+});
+
+test("canonicalize sorts keys at every depth", () => {
+  const out = canonicalize({
+    z: { beta: { two: 2, one: 1 }, alpha: 0 },
+    a: 1,
+  });
+  assert.equal(out, '{"a":1,"z":{"alpha":0,"beta":{"one":1,"two":2}}}');
+});
+
+test("canonicalize preserves arrays of objects in order, canonicalizing elements", () => {
+  const out = canonicalize({
+    items: [
+      { b: 2, a: 1 },
+      { d: null, c: [true, "s"] },
+    ],
+  });
+  assert.equal(out, '{"items":[{"a":1,"b":2},{"c":[true,"s"],"d":null}]}');
+});
+
+test("canonicalize skips undefined-valued members at any depth", () => {
+  const out = canonicalize({
+    a: undefined,
+    b: { c: undefined, d: 1 },
+  });
+  assert.equal(out, '{"b":{"d":1}}');
+});
+
+test("canonicalize matches jcsCanonicalize byte-for-byte", () => {
+  const doc = { nested: { y: [1, { k: "v" }], x: "s" }, top: true };
+  assert.equal(canonicalize(doc), jcsCanonicalize(doc));
+});
+
+test("canonicalize handles a DelegationCredential-shaped document (regression)", async () => {
+  // Realistic nested DC: `constraints` and `metadata` are nested objects whose
+  // keys do not appear at the top level. Under the v0.1 canonicalize these
+  // were emptied, so the issuer signed bytes that didn't match the document
+  // and the registry rejected the proof (invalid_proof).
+  const dc = {
+    delegation_id: "dc_01example",
+    issued_by: "axis:example:operator",
+    subject: "axis:example:agent",
+    scope: ["content:comment"],
+    constraints: {
+      max_uses: 10,
+      expires_at: "2027-01-01T00:00:00Z",
+      audience: "platform.example.com",
+    },
+    metadata: { purpose: "integration test" },
+    issued_at: "2026-07-06T00:00:00Z",
+  };
+
+  const canonical = canonicalize(dc);
+  // Nested constraint keys survive and are sorted.
+  assert.match(canonical, /"constraints":\{"audience":"platform\.example\.com","expires_at":"2027-01-01T00:00:00Z","max_uses":10\}/);
+  assert.match(canonical, /"metadata":\{"purpose":"integration test"\}/);
+
+  // A signature over canonicalize(dc) verifies against the JCS bytes the
+  // registry recomputes — the end-to-end property the shallow form broke.
+  const kp = await generateKeypair();
+  const sig = await signCanonical(kp.privateKey, dc);
+  const pub = await importPublicKey(kp.publicKeyB64);
+  const ok = await crypto.subtle.verify(
+    "Ed25519",
+    pub,
+    b64urlDecode(sig),
+    new TextEncoder().encode(canonical),
+  );
+  assert.equal(ok, true);
+});
+
 test("signCanonical + verify roundtrip matches registry proof format (JCS, v0.3)", async () => {
   const kp = await generateKeypair();
   const body = {
@@ -140,13 +216,24 @@ test("signCanonical + verify roundtrip matches registry proof format (JCS, v0.3)
   );
   assert.equal(ok, true);
 
-  // Legacy canonicalize would have stripped the nested `metadata.name`, so a
-  // verify over the legacy bytes must FAIL — proving we moved off the v0.1 form.
-  const legacyOk = await crypto.subtle.verify(
+  // canonicalize is JCS as of v0.3.1, so verifying over canonicalize(body)
+  // bytes must also succeed — the exported canonicalize and the bytes
+  // signCanonical signs can never diverge again.
+  const canonicalizeOk = await crypto.subtle.verify(
     "Ed25519",
     pub,
     b64urlDecode(sig),
     new TextEncoder().encode(canonicalize(body)),
+  );
+  assert.equal(canonicalizeOk, true);
+
+  // And the legacy v0.1 form (top-level-sort replacer, which stripped the
+  // nested `metadata.name`) must NOT verify — proving we're off the v0.1 form.
+  const legacyOk = await crypto.subtle.verify(
+    "Ed25519",
+    pub,
+    b64urlDecode(sig),
+    new TextEncoder().encode(JSON.stringify(body, Object.keys(body).sort())),
   );
   assert.equal(legacyOk, false);
 });

@@ -4,6 +4,32 @@ All notable changes to `axis-protocol-sdk`. Format follows [Keep a Changelog](ht
 
 `SDK_VERSION` constant is derived from `package.json` so the two cannot drift.
 
+## [Unreleased]
+
+### Fixed — `canonicalize()` now recurses into nested objects and arrays
+
+The exported `canonicalize()` still used the legacy top-level-sort form,
+`JSON.stringify(obj, Object.keys(obj).sort())`. The array second argument to
+`JSON.stringify` is a replacer that filters keys at **every** nesting level, so
+any nested key not also present at the top level was silently stripped:
+
+```js
+canonicalize({ b: 1, a: { d: false, c: "x" } });
+// before: '{"a":{},"b":1}'   — nested object emptied
+// after:  '{"a":{"c":"x","d":false},"b":1}'
+```
+
+Any consumer that canonicalized a nested document with this function (e.g. a
+DelegationCredential carrying a `constraints` object) signed bytes that did not
+match the document, producing a proof the registry rejects (`invalid_proof`).
+
+`canonicalize()` now delegates to the RFC 8785 JCS canonicalizer
+(`jcsCanonicalize`), so it is byte-for-byte identical to what `signCanonical`
+and `signDelegation` sign and what the registry verifies: keys sorted at every
+depth, arrays preserved in order with elements canonicalized, `undefined`-valued
+members omitted. The non-object input guard is unchanged. To reproduce a
+pre-JCS legacy signature byte-for-byte, inline the old expression directly.
+
 ## [0.2.3] — 2026-05-12
 
 Two coordinated fixes that close axis-comments WC-M2 and WC-L4 on the SDK side. Both purely additive; existing 0.2.2 callers unchanged.
